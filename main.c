@@ -16,7 +16,7 @@
 
 #define NAMES_DEFAULT_CAP 4
 #define BUCKET_SIZE 1024 * 1024 * 10
-#define INITIAL_BUFFER_SIZE 1024 * 1024 * 10
+#define INITIAL_BUFFER_SIZE 1024 * 1024 * 8
 
 typedef int ErrNo;
 typedef int Status;
@@ -334,9 +334,6 @@ int main(int argc, char **argv)
 
     for (size_t b_idx = 0; b_idx < nb->bucket_size; b_idx++) {
         if (nb->names[b_idx] != NULL && nb->names[b_idx]->len > 1) {
-            // printf("\nChecking bucket [%zu] of %zu\n", b_idx,
-            //        nb->names[b_idx]->len);
-
             Arena A_inner = { 0 };
 
             size_t num_files = nb->names[b_idx]->len;
@@ -357,8 +354,7 @@ int main(int argc, char **argv)
             NameBucket *nb_inner = NULL;
 
             int done = 0;
-            for (size_t bs = initial_bs; done != 1; bs *= 2) {
-                buffer = arena_realloc(&A_inner, buffer, bs / 2, bs);
+            for (size_t bs = initial_bs; done != 1;) {
                 nb_inner = name_bucket_init(&A_inner, num_files * 512);
 
                 int checked_num = 0;
@@ -375,7 +371,6 @@ int main(int argc, char **argv)
                         if (checked[file_idx] == 0) {
                             continue;
                         }
-                        memset(buffer, 0, bs);
 
                         size_t n = fread(buffer, sizeof(char), bs,
                                          files[file_idx]);
