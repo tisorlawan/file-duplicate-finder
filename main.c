@@ -1,18 +1,23 @@
-#include <limits.h>
-#include <stddef.h>
-#include <sys/stat.h>
-#include <stdlib.h>
-#include <stdio.h>
+#include <assert.h>
+#include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
+#include <limits.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 // TODO: glibc compability issues regarding d_type
+// Use some kind of memory allocator
 
 #define NAMES_DEFAULT_CAP 4
 #define BUCKET_SIZE 1024 * 1024 * 10
+#define INITIAL_BUFFER_SIZE 1024 * 1024 * 10
 
 typedef int ErrNo;
+typedef int Status;
 
 typedef struct {
     char **names;
@@ -33,7 +38,7 @@ Names *names_init()
 void names_add(Names *n, const char *name)
 {
     if (n->len == n->cap) {
-        n->cap *= 2; // double the capacity
+        n->cap *= 2;
         n->names = realloc(n->names, sizeof(*(n->names)) * n->cap);
     }
     size_t name_len = strlen(name);
@@ -232,35 +237,147 @@ void stat_files(Names *n, NameBucket *nb, size_t min_size)
     free(s);
 }
 
-int main(void)
+// https://stackoverflow.com/a/12923949
+typedef enum {
+    STR2INT_SUCCESS,
+    STR2INT_OVERFLOW,
+    STR2INT_UNDERFLOW,
+    STR2INT_INCONVERTIBLE
+} str2int_errno;
+
+str2int_errno str2int(int *out, char *s, int base)
 {
-    NameBucket *nb = name_bucket_init(BUCKET_SIZE);
+    char *end;
+    if (s[0] == '\0' || isspace(s[0]))
+        return STR2INT_INCONVERTIBLE;
+    errno = 0;
+    long l = strtol(s, &end, base);
+    /* Both checks are needed because INT_MAX == LONG_MAX is possible. */
+    if (l > INT_MAX || (errno == ERANGE && l == LONG_MAX))
+        return STR2INT_OVERFLOW;
+    if (l < INT_MIN || (errno == ERANGE && l == LONG_MIN))
+        return STR2INT_UNDERFLOW;
+    if (*end != '\0')
+        return STR2INT_INCONVERTIBLE;
+    *out = l;
+    return STR2INT_SUCCESS;
+}
+
+void usage(char **argv)
+{
+    fprintf(stderr, "Usage: %s <PATH> (--min-bytes|-b [BYTES]) (--help | -h)\n",
+            argv[0]);
+}
+
+typedef struct {
+    char *path;
+    int min_bytes;
+} Args;
+
+int args_help = 0;
+Args *args_parse(int argc, char **argv)
+{
+    if (argc < 2) {
+        usage(argv);
+        return NULL;
+    }
+
+    char *path = NULL;
+    int min_bytes = 0;
+
+    int i = 1;
+
+    while (argv[i] != NULL && i <= argc) {
+        if (strncmp(argv[i], "-b", 2) == 0 ||
+            strncmp(argv[i], "--min-bytes", 11) == 0) {
+            if (i < argc - 1) {
+                char *c = argv[i + 1];
+                if (str2int(&min_bytes, c, 10) != STR2INT_SUCCESS) {
+                    fprintf(stderr, "ERROR: invalid value for option %s\n",
+                            argv[i]);
+                    return NULL;
+                }
+            }
+            i += 2;
+        } else if (strncmp(argv[i], "-h", 2) == 0 ||
+                   strncmp(argv[i], "--help", 6) == 0) {
+            usage(argv);
+            args_help = 1;
+            return NULL;
+        } else if (strncmp(argv[i], "-", 1) == 0) {
+            fprintf(stderr, "ERROR: unknown option %s\n", argv[i]);
+            return NULL;
+        } else {
+            path = argv[i];
+            i += 1;
+        }
+    }
+
+    if (path == NULL) {
+        fprintf(stderr, "ERROR: no <PATH> is provided\n");
+        usage(argv);
+        return NULL;
+    }
+
+    Args *args = malloc(sizeof(*args));
+    args->min_bytes = min_bytes;
+    args->path = malloc(strlen(path) + 1);
+    memcpy(args->path, path, strlen(path));
+    args->path[strlen(path)] = '\0';
+
+    return args;
+}
+
+void args_free(Args *a)
+{
+    if (a != NULL) {
+        free(a->path);
+    }
+    free(a);
+}
+
+int main(int argc, char **argv)
+{
+    Args *args = args_parse(argc, argv);
+    if (args == NULL) {
+        if (args_help == 1) {
+            return 0;
+        }
+        return 1;
+    }
+
+    fprintf(stderr, "Arguments:\n");
+    fprintf(stderr, " path     : %s\n", args->path);
+    fprintf(stderr, " min_bytes: %d\n", args->min_bytes);
+    fprintf(stderr, "\n");
+    fprintf(stderr, "===============================\n");
 
     Names *dir_names = names_init();
     Names *file_names = names_init();
+    read_dir(args->path, dir_names, file_names);
 
-    read_dir("tests", dir_names, file_names);
-
-    stat_files(file_names, nb, 1024);
+    NameBucket *nb = name_bucket_init(BUCKET_SIZE);
+    stat_files(file_names, nb, args->min_bytes);
 
     for (size_t b_idx = 0; b_idx < nb->bucket_size; b_idx++) {
         if (nb->names[b_idx] != NULL && nb->names[b_idx]->len > 1) {
             /* printf("\nChecking bucket [%zu] of %zu\n", b_idx, */
             /*        nb->names[b_idx]->len); */
 
-            size_t nf = nb->names[b_idx]->len;
+            size_t num_files = nb->names[b_idx]->len;
+            char **bucket_fnames = nb->names[b_idx]->names;
 
-            FILE **files = malloc(nf * sizeof(FILE *));
-            for (size_t j = 0; j < nf; j++) {
-                files[j] = fopen(nb->names[b_idx]->names[j], "rb");
+            FILE **files = malloc(num_files * sizeof(FILE *));
+            for (size_t j = 0; j < num_files; j++) {
+                files[j] = fopen(bucket_fnames[j], "rb");
             }
 
-            int *checked = malloc(nf * sizeof(int));
-            for (size_t j = 0; j < nf; j++) {
+            int *checked = malloc(num_files * sizeof(int));
+            for (size_t j = 0; j < num_files; j++) {
                 checked[j] = 1;
             }
 
-            int initial_bs = 1024 * 1024 * 10;
+            int initial_bs = INITIAL_BUFFER_SIZE;
             char *buffer = malloc(initial_bs);
             NameBucket *nb_inner = NULL;
 
@@ -268,10 +385,10 @@ int main(void)
             for (size_t bs = initial_bs; done != 1; bs *= 2) {
                 buffer = realloc(buffer, bs);
 
-                nb_inner = name_bucket_init(nf * 512);
+                nb_inner = name_bucket_init(num_files * 512);
 
                 int checked_num = 0;
-                for (size_t j = 0; j < nf; j++) {
+                for (size_t j = 0; j < num_files; j++) {
                     checked_num += checked[j];
                 }
                 if (checked_num == 0) {
@@ -279,7 +396,8 @@ int main(void)
                 }
 
                 if (done == 0) {
-                    for (size_t file_idx = 0; file_idx < nf; file_idx++) {
+                    for (size_t file_idx = 0; file_idx < num_files;
+                         file_idx++) {
                         if (checked[file_idx] == 0) {
                             continue;
                         }
@@ -288,10 +406,9 @@ int main(void)
                         size_t n = fread(buffer, sizeof(char), bs,
                                          files[file_idx]);
                         if (n > 0) {
-                            /* printf("x %s\n", nb->names[b_idx]->names[file_idx]); */
-                            name_bucket_add_entry_chars(
-                                    nb_inner, nb->names[b_idx]->names[file_idx],
-                                    buffer, n);
+                            name_bucket_add_entry_chars(nb_inner,
+                                                        bucket_fnames[file_idx],
+                                                        buffer, n);
                         }
                         if (feof(files[file_idx])) {
                             done = 1;
@@ -306,7 +423,7 @@ int main(void)
                     continue;
                 }
 
-                for (size_t m = 0; m < nf; m++) {
+                for (size_t m = 0; m < num_files; m++) {
                     checked[m] = 0;
                 }
 
@@ -314,7 +431,7 @@ int main(void)
                     if (nb_inner->names[k] != NULL &&
                         nb_inner->names[k]->len > 1) {
                         for (size_t l = 0; l < nb_inner->names[k]->len; l++) {
-                            for (size_t n = 0; n < nf; n++) {
+                            for (size_t n = 0; n < num_files; n++) {
                                 if (strcmp(nb_inner->names[k]->names[l],
                                            nb->names[b_idx]->names[n]) == 0) {
                                     checked[n] = 1;
@@ -322,27 +439,18 @@ int main(void)
                                 }
                             }
                         }
-                    } else if (nb_inner->names[k] != NULL &&
-                               nb_inner->names[k]->len == 1) {
-                        for (size_t n = 0; n < nf; n++) {
-                            if (strcmp(nb_inner->names[k]->names[0],
-                                       nb->names[b_idx]->names[n]) == 0) {
-                                checked[n] = 0;
-                                break;
-                            }
-                        }
                     }
                 }
                 name_bucket_free(nb_inner);
             }
 
-            for (size_t j = 0; j < nf; j++) {
+            for (size_t j = 0; j < num_files; j++) {
                 if (files[j] != NULL) {
                     fclose(files[j]);
                 }
             }
-            free(files);
 
+            free(files);
             free(checked);
             free(buffer);
         }
@@ -350,8 +458,8 @@ int main(void)
 
     names_free(dir_names);
     names_free(file_names);
-
     name_bucket_free(nb);
+    args_free(args);
 
     return 0;
 }
