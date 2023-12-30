@@ -13,7 +13,6 @@
 #include "lib/arena.h"
 
 // TODO: glibc compability issues regarding d_type
-// Use some kind of memory allocator
 
 #define NAMES_DEFAULT_CAP 4
 #define BUCKET_SIZE 1024 * 1024 * 10
@@ -38,16 +37,16 @@ Names *names_init(Arena *A)
     return n;
 }
 
-void names_add(Arena *a, Names *n, const char *name)
+void names_add(Arena *A, Names *n, const char *name)
 {
     if (n->len == n->cap) {
         size_t old_cap = n->cap;
         n->cap *= 2;
-        n->names = arena_realloc(a, n->names, sizeof(*(n->names)) * old_cap,
+        n->names = arena_realloc(A, n->names, sizeof(*(n->names)) * old_cap,
                                  sizeof(*(n->names)) * n->cap);
     }
     size_t name_len = strlen(name);
-    n->names[n->len] = arena_alloc(a, name_len + 1);
+    n->names[n->len] = arena_alloc(A, name_len + 1);
     strncpy(n->names[n->len], name, name_len + 1);
     n->names[n->len][name_len] = '\0';
 
@@ -62,13 +61,13 @@ void names_debug(Names *n)
 }
 
 // TODO: handle trailing slash
-char *join_path(Arena *a, const char *p1, const char *p2)
+char *join_path(Arena *A, const char *p1, const char *p2)
 {
     size_t p1_len = strlen(p1);
     size_t p2_len = strlen(p2);
 
     size_t path_len = p1_len + p2_len + 1;
-    char *joined_path = arena_alloc(a, path_len + 1);
+    char *joined_path = arena_alloc(A, path_len + 1);
 
     memcpy(joined_path, p1, p1_len);
     joined_path[p1_len] = '/';
@@ -78,7 +77,7 @@ char *join_path(Arena *a, const char *p1, const char *p2)
     return joined_path;
 }
 
-ErrNo read_dir(Arena *a, const char *name, Names *dir_names,
+ErrNo read_dir(Arena *A, const char *name, Names *dir_names,
                Names *reg_file_names)
 {
     DIR *dir = opendir(name);
@@ -108,12 +107,12 @@ ErrNo read_dir(Arena *a, const char *name, Names *dir_names,
                 strncmp(d->d_name, "..", dname_len) == 0) {
                 continue;
             }
-            char *joined_path = join_path(a, name, d->d_name);
+            char *joined_path = join_path(A, name, d->d_name);
             if (d->d_type == DT_DIR) {
-                names_add(a, dir_names, d->d_name);
-                read_dir(a, joined_path, dir_names, reg_file_names);
+                names_add(A, dir_names, d->d_name);
+                read_dir(A, joined_path, dir_names, reg_file_names);
             } else if (d->d_type == DT_REG) {
-                names_add(a, reg_file_names, joined_path);
+                names_add(A, reg_file_names, joined_path);
             }
         }
     } while (d != NULL);
@@ -147,10 +146,10 @@ typedef struct {
     size_t bucket_size;
 } NameBucket;
 
-NameBucket *name_bucket_init(Arena *a, size_t bucket_size)
+NameBucket *name_bucket_init(Arena *A, size_t bucket_size)
 {
-    NameBucket *nb = arena_alloc(a, sizeof(NameBucket));
-    nb->names = arena_alloc(a, bucket_size * sizeof(Names *));
+    NameBucket *nb = arena_alloc(A, sizeof(NameBucket));
+    nb->names = arena_alloc(A, bucket_size * sizeof(Names *));
     nb->bucket_size = bucket_size;
 
     for (size_t i = 0; i < bucket_size; i++) {
@@ -163,24 +162,24 @@ NameBucket *name_bucket_init(Arena *a, size_t bucket_size)
     return nb;
 }
 
-void name_bucket_add_entry_size(Arena *a, NameBucket *nb, const char *name,
+void name_bucket_add_entry_size(Arena *A, NameBucket *nb, const char *name,
                                 size_t size)
 {
     unsigned int h = hash(size, nb->bucket_size);
     if (nb->names[h] == NULL) {
-        nb->names[h] = names_init(a);
+        nb->names[h] = names_init(A);
     }
-    names_add(a, nb->names[h], name);
+    names_add(A, nb->names[h], name);
 }
 
-void name_bucket_add_entry_chars(Arena *a, NameBucket *nb, const char *name,
+void name_bucket_add_entry_chars(Arena *A, NameBucket *nb, const char *name,
                                  char *chars, size_t n)
 {
     unsigned int h = djb2_hash(chars, n, nb->bucket_size);
     if (nb->names[h] == NULL) {
-        nb->names[h] = names_init(a);
+        nb->names[h] = names_init(A);
     }
-    names_add(a, nb->names[h], name);
+    names_add(A, nb->names[h], name);
 }
 
 void name_bucket_debug(NameBucket *nb)
@@ -204,13 +203,13 @@ void name_bucket_debug(NameBucket *nb)
     }
 }
 
-void stat_files(Arena *a, Names *n, NameBucket *nb, size_t min_size)
+void stat_files(Arena *A, Names *n, NameBucket *nb, size_t min_size)
 {
-    struct stat *s = arena_alloc(a, sizeof(struct stat));
+    struct stat *s = arena_alloc(A, sizeof(struct stat));
     for (size_t i = 0; i < n->len; i++) {
         stat(n->names[i], s);
         if ((size_t)s->st_size > min_size) {
-            name_bucket_add_entry_size(a, nb, n->names[i], s->st_size);
+            name_bucket_add_entry_size(A, nb, n->names[i], s->st_size);
         }
         /* printf("[%zu] %s\n", s->st_size, n->names[i]); */
     }
@@ -254,7 +253,7 @@ typedef struct {
 } Args;
 
 int args_help = 0;
-Args *args_parse(Arena *a, int argc, char **argv)
+Args *args_parse(Arena *A, int argc, char **argv)
 {
     if (argc < 2) {
         usage(argv);
@@ -298,9 +297,9 @@ Args *args_parse(Arena *a, int argc, char **argv)
         return NULL;
     }
 
-    Args *args = arena_alloc(a, sizeof(*args));
+    Args *args = arena_alloc(A, sizeof(*args));
     args->min_bytes = min_bytes;
-    args->path = arena_alloc(a, strlen(path) + 1);
+    args->path = arena_alloc(A, strlen(path) + 1);
     memcpy(args->path, path, strlen(path));
     args->path[strlen(path)] = '\0';
 
@@ -427,6 +426,5 @@ int main(int argc, char **argv)
     }
 
     arena_free(&A);
-
     return 0;
 }
