@@ -338,28 +338,29 @@ int main(int argc, char **argv)
             // printf("\nChecking bucket [%zu] of %zu\n", b_idx,
             //        nb->names[b_idx]->len);
 
+            Arena A_inner = { 0 };
+
             size_t num_files = nb->names[b_idx]->len;
             char **bucket_fnames = nb->names[b_idx]->names;
 
-            FILE **files = arena_alloc(&A, num_files * sizeof(FILE *));
+            FILE **files = arena_alloc(&A_inner, num_files * sizeof(FILE *));
             for (size_t j = 0; j < num_files; j++) {
                 files[j] = fopen(bucket_fnames[j], "rb");
             }
 
-            int *checked = arena_alloc(&A, num_files * sizeof(int));
+            int *checked = arena_alloc(&A_inner, num_files * sizeof(int));
             for (size_t j = 0; j < num_files; j++) {
                 checked[j] = 1;
             }
 
             int initial_bs = INITIAL_BUFFER_SIZE;
-            char *buffer = arena_alloc(&A, initial_bs);
+            char *buffer = arena_alloc(&A_inner, initial_bs);
             NameBucket *nb_inner = NULL;
 
             int done = 0;
             for (size_t bs = initial_bs; done != 1; bs *= 2) {
-                buffer = arena_realloc(&A, buffer, bs / 2, bs);
-
-                nb_inner = name_bucket_init(&A, num_files * 512);
+                buffer = arena_realloc(&A_inner, buffer, bs / 2, bs);
+                nb_inner = name_bucket_init(&A_inner, num_files * 512);
 
                 int checked_num = 0;
                 for (size_t j = 0; j < num_files; j++) {
@@ -380,7 +381,7 @@ int main(int argc, char **argv)
                         size_t n = fread(buffer, sizeof(char), bs,
                                          files[file_idx]);
                         if (n > 0) {
-                            name_bucket_add_entry_chars(&A, nb_inner,
+                            name_bucket_add_entry_chars(&A_inner, nb_inner,
                                                         bucket_fnames[file_idx],
                                                         buffer, n);
                         }
@@ -421,6 +422,7 @@ int main(int argc, char **argv)
                     fclose(files[j]);
                 }
             }
+            arena_free(&A_inner);
         }
     }
 
