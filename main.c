@@ -9,6 +9,9 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#define ARENA_IMPLEMENTATION
+#include "lib/arena.h"
+
 // TODO: glibc compability issues regarding d_type
 // Use some kind of memory allocator
 
@@ -25,37 +28,30 @@ typedef struct {
     size_t cap;
 } Names;
 
-Names *names_init()
+Names *names_init(Arena *A)
 {
-    Names *n = malloc(sizeof(Names));
-    n->names = malloc(sizeof(char *) * NAMES_DEFAULT_CAP);
+    Names *n = arena_alloc(A, sizeof(Names));
+    n->names = arena_alloc(A, sizeof(char *) * NAMES_DEFAULT_CAP);
     n->len = 0;
     n->cap = 2;
 
     return n;
 }
 
-void names_add(Names *n, const char *name)
+void names_add(Arena *a, Names *n, const char *name)
 {
     if (n->len == n->cap) {
+        size_t old_cap = n->cap;
         n->cap *= 2;
-        n->names = realloc(n->names, sizeof(*(n->names)) * n->cap);
+        n->names = arena_realloc(a, n->names, sizeof(*(n->names)) * old_cap,
+                                 sizeof(*(n->names)) * n->cap);
     }
     size_t name_len = strlen(name);
-    n->names[n->len] = malloc(name_len + 1);
+    n->names[n->len] = arena_alloc(a, name_len + 1);
     strncpy(n->names[n->len], name, name_len + 1);
     n->names[n->len][name_len] = '\0';
 
     n->len += 1;
-}
-
-void names_free(Names *n)
-{
-    for (size_t i = 0; i < n->len; i++) {
-        free(n->names[i]);
-    }
-    free(n->names);
-    free(n);
 }
 
 void names_debug(Names *n)
@@ -66,13 +62,13 @@ void names_debug(Names *n)
 }
 
 // TODO: handle trailing slash
-char *join_path(const char *p1, const char *p2)
+char *join_path(Arena *a, const char *p1, const char *p2)
 {
     size_t p1_len = strlen(p1);
     size_t p2_len = strlen(p2);
 
     size_t path_len = p1_len + p2_len + 1;
-    char *joined_path = malloc(path_len + 1);
+    char *joined_path = arena_alloc(a, path_len + 1);
 
     memcpy(joined_path, p1, p1_len);
     joined_path[p1_len] = '/';
@@ -82,7 +78,8 @@ char *join_path(const char *p1, const char *p2)
     return joined_path;
 }
 
-ErrNo read_dir(const char *name, Names *dir_names, Names *reg_file_names)
+ErrNo read_dir(Arena *a, const char *name, Names *dir_names,
+               Names *reg_file_names)
 {
     DIR *dir = opendir(name);
 
@@ -111,19 +108,12 @@ ErrNo read_dir(const char *name, Names *dir_names, Names *reg_file_names)
                 strncmp(d->d_name, "..", dname_len) == 0) {
                 continue;
             }
+            char *joined_path = join_path(a, name, d->d_name);
             if (d->d_type == DT_DIR) {
-                char *joined_path = join_path(name, d->d_name);
-
-                names_add(dir_names, d->d_name);
-                read_dir(joined_path, dir_names, reg_file_names);
-
-                free(joined_path);
+                names_add(a, dir_names, d->d_name);
+                read_dir(a, joined_path, dir_names, reg_file_names);
             } else if (d->d_type == DT_REG) {
-                char *joined_path = join_path(name, d->d_name);
-
-                names_add(reg_file_names, joined_path);
-
-                free(joined_path);
+                names_add(a, reg_file_names, joined_path);
             }
         }
     } while (d != NULL);
@@ -157,10 +147,10 @@ typedef struct {
     size_t bucket_size;
 } NameBucket;
 
-NameBucket *name_bucket_init(size_t bucket_size)
+NameBucket *name_bucket_init(Arena *a, size_t bucket_size)
 {
-    NameBucket *nb = malloc(sizeof(NameBucket));
-    nb->names = calloc(bucket_size, sizeof(Names *));
+    NameBucket *nb = arena_alloc(a, sizeof(NameBucket));
+    nb->names = arena_alloc(a, bucket_size * sizeof(Names *));
     nb->bucket_size = bucket_size;
 
     for (size_t i = 0; i < bucket_size; i++) {
@@ -173,23 +163,24 @@ NameBucket *name_bucket_init(size_t bucket_size)
     return nb;
 }
 
-void name_bucket_add_entry_size(NameBucket *nb, const char *name, size_t size)
+void name_bucket_add_entry_size(Arena *a, NameBucket *nb, const char *name,
+                                size_t size)
 {
     unsigned int h = hash(size, nb->bucket_size);
     if (nb->names[h] == NULL) {
-        nb->names[h] = names_init();
+        nb->names[h] = names_init(a);
     }
-    names_add(nb->names[h], name);
+    names_add(a, nb->names[h], name);
 }
 
-void name_bucket_add_entry_chars(NameBucket *nb, const char *name, char *chars,
-                                 size_t n)
+void name_bucket_add_entry_chars(Arena *a, NameBucket *nb, const char *name,
+                                 char *chars, size_t n)
 {
     unsigned int h = djb2_hash(chars, n, nb->bucket_size);
     if (nb->names[h] == NULL) {
-        nb->names[h] = names_init();
+        nb->names[h] = names_init(a);
     }
-    names_add(nb->names[h], name);
+    names_add(a, nb->names[h], name);
 }
 
 void name_bucket_debug(NameBucket *nb)
@@ -213,28 +204,16 @@ void name_bucket_debug(NameBucket *nb)
     }
 }
 
-void name_bucket_free(NameBucket *nb)
+void stat_files(Arena *a, Names *n, NameBucket *nb, size_t min_size)
 {
-    for (size_t i = 0; i < nb->bucket_size; i++) {
-        if (nb->names[i] != NULL) {
-            names_free(nb->names[i]);
-        }
-    }
-    free(nb->names);
-    free(nb);
-}
-
-void stat_files(Names *n, NameBucket *nb, size_t min_size)
-{
-    struct stat *s = malloc(sizeof(struct stat));
+    struct stat *s = arena_alloc(a, sizeof(struct stat));
     for (size_t i = 0; i < n->len; i++) {
         stat(n->names[i], s);
         if ((size_t)s->st_size > min_size) {
-            name_bucket_add_entry_size(nb, n->names[i], s->st_size);
+            name_bucket_add_entry_size(a, nb, n->names[i], s->st_size);
         }
         /* printf("[%zu] %s\n", s->st_size, n->names[i]); */
     }
-    free(s);
 }
 
 // https://stackoverflow.com/a/12923949
@@ -275,7 +254,7 @@ typedef struct {
 } Args;
 
 int args_help = 0;
-Args *args_parse(int argc, char **argv)
+Args *args_parse(Arena *a, int argc, char **argv)
 {
     if (argc < 2) {
         usage(argv);
@@ -319,26 +298,20 @@ Args *args_parse(int argc, char **argv)
         return NULL;
     }
 
-    Args *args = malloc(sizeof(*args));
+    Args *args = arena_alloc(a, sizeof(*args));
     args->min_bytes = min_bytes;
-    args->path = malloc(strlen(path) + 1);
+    args->path = arena_alloc(a, strlen(path) + 1);
     memcpy(args->path, path, strlen(path));
     args->path[strlen(path)] = '\0';
 
     return args;
 }
 
-void args_free(Args *a)
-{
-    if (a != NULL) {
-        free(a->path);
-    }
-    free(a);
-}
-
 int main(int argc, char **argv)
 {
-    Args *args = args_parse(argc, argv);
+    Arena A = { 0 };
+
+    Args *args = args_parse(&A, argc, argv);
     if (args == NULL) {
         if (args_help == 1) {
             return 0;
@@ -352,40 +325,41 @@ int main(int argc, char **argv)
     fprintf(stderr, "\n");
     fprintf(stderr, "===============================\n");
 
-    Names *dir_names = names_init();
-    Names *file_names = names_init();
-    read_dir(args->path, dir_names, file_names);
+    Names *dir_names = names_init(&A);
+    Names *file_names = names_init(&A);
 
-    NameBucket *nb = name_bucket_init(BUCKET_SIZE);
-    stat_files(file_names, nb, args->min_bytes);
+    read_dir(&A, args->path, dir_names, file_names);
+
+    NameBucket *nb = name_bucket_init(&A, BUCKET_SIZE);
+    stat_files(&A, file_names, nb, args->min_bytes);
 
     for (size_t b_idx = 0; b_idx < nb->bucket_size; b_idx++) {
         if (nb->names[b_idx] != NULL && nb->names[b_idx]->len > 1) {
-            /* printf("\nChecking bucket [%zu] of %zu\n", b_idx, */
-            /*        nb->names[b_idx]->len); */
+            // printf("\nChecking bucket [%zu] of %zu\n", b_idx,
+            //        nb->names[b_idx]->len);
 
             size_t num_files = nb->names[b_idx]->len;
             char **bucket_fnames = nb->names[b_idx]->names;
 
-            FILE **files = malloc(num_files * sizeof(FILE *));
+            FILE **files = arena_alloc(&A, num_files * sizeof(FILE *));
             for (size_t j = 0; j < num_files; j++) {
                 files[j] = fopen(bucket_fnames[j], "rb");
             }
 
-            int *checked = malloc(num_files * sizeof(int));
+            int *checked = arena_alloc(&A, num_files * sizeof(int));
             for (size_t j = 0; j < num_files; j++) {
                 checked[j] = 1;
             }
 
             int initial_bs = INITIAL_BUFFER_SIZE;
-            char *buffer = malloc(initial_bs);
+            char *buffer = arena_alloc(&A, initial_bs);
             NameBucket *nb_inner = NULL;
 
             int done = 0;
             for (size_t bs = initial_bs; done != 1; bs *= 2) {
-                buffer = realloc(buffer, bs);
+                buffer = arena_realloc(&A, buffer, bs / 2, bs);
 
-                nb_inner = name_bucket_init(num_files * 512);
+                nb_inner = name_bucket_init(&A, num_files * 512);
 
                 int checked_num = 0;
                 for (size_t j = 0; j < num_files; j++) {
@@ -406,7 +380,7 @@ int main(int argc, char **argv)
                         size_t n = fread(buffer, sizeof(char), bs,
                                          files[file_idx]);
                         if (n > 0) {
-                            name_bucket_add_entry_chars(nb_inner,
+                            name_bucket_add_entry_chars(&A, nb_inner,
                                                         bucket_fnames[file_idx],
                                                         buffer, n);
                         }
@@ -419,7 +393,6 @@ int main(int argc, char **argv)
                 if (done == 1) {
                     printf("\n");
                     name_bucket_debug(nb_inner);
-                    name_bucket_free(nb_inner);
                     continue;
                 }
 
@@ -441,7 +414,6 @@ int main(int argc, char **argv)
                         }
                     }
                 }
-                name_bucket_free(nb_inner);
             }
 
             for (size_t j = 0; j < num_files; j++) {
@@ -449,17 +421,10 @@ int main(int argc, char **argv)
                     fclose(files[j]);
                 }
             }
-
-            free(files);
-            free(checked);
-            free(buffer);
         }
     }
 
-    names_free(dir_names);
-    names_free(file_names);
-    name_bucket_free(nb);
-    args_free(args);
+    arena_free(&A);
 
     return 0;
 }
