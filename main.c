@@ -18,7 +18,7 @@
 #define BUCKET_SIZE 1024 * 1024 * 10
 #define INITIAL_BUFFER_SIZE 1024 * 1024 * 8
 
-typedef int ErrNo;
+typedef int Errno;
 typedef int Status;
 
 typedef struct {
@@ -77,7 +77,7 @@ char *join_path(Arena *A, const char *p1, const char *p2)
     return joined_path;
 }
 
-ErrNo read_dir(Arena *A, const char *name, Names *dir_names,
+Errno read_dir(Arena *A, const char *name, Names *dir_names,
                Names *reg_file_names)
 {
     DIR *dir = opendir(name);
