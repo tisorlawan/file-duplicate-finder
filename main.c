@@ -267,7 +267,8 @@ str2int_errno str2int(int *out, char *s, int base)
 
 void usage(char **argv)
 {
-    fprintf(stderr, "Usage: %s <PATH> (--min-bytes|-b [BYTES]) (--help | -h)\n",
+    fprintf(stderr,
+            "Usage:\n  %s <PATH> (--min-bytes|-b [BYTES]) (--help|-h)\n",
             argv[0]);
 }
 
