@@ -181,17 +181,23 @@ void name_bucket_add_entry_chars(Arena *A, NameBucket *nb, const char *name,
     names_add(A, nb->names[h], name);
 }
 
-void print_human_readable_size(size_t s)
+char *human_readable_size(Arena *A, size_t s)
 {
+    size_t buf_size = 16;
+    char *buf = arena_alloc(A, buf_size);
+    memset(buf, 0, buf_size);
+
     if (s < 1024) {
-        printf("%zu B", s);
+        snprintf(buf, buf_size, "%zu B", s);
     } else if (s < 1024 * 1024) {
-        printf("%.1f KB", (double)s / 1024.0);
+        snprintf(buf, buf_size, "%.1f KB", (double)s / 1024.0);
     } else if (s < 1024 * 1024 * 1024) {
-        printf("%.1f MB", (double)s / (1024.0 * 1024.0));
+        snprintf(buf, buf_size, "%.1f MB", (double)s / (1024.0 * 1024.0));
     } else {
-        printf("%.1f GB", (double)s / (1024.0 * 1024.0 * 1024.0));
+        snprintf(buf, buf_size, "%.1f GB",
+                 (double)s / (1024.0 * 1024.0 * 1024.0));
     }
+    return buf;
 }
 
 void name_bucket_list(Arena *A, NameBucket *nb)
@@ -205,13 +211,10 @@ void name_bucket_list(Arena *A, NameBucket *nb)
                     if (j == 0) {
                         struct stat *s = arena_alloc(A, sizeof(struct stat));
                         stat(names->names[j], s);
-                        printf("* Wasted size = ");
-                        print_human_readable_size(s->st_size *
-                                                  (names->len - 1));
-                        printf(" [@ ");
-                        print_human_readable_size(s->st_size);
-                        printf("]");
-                        printf("\n");
+                        printf("* Wasted size = %s [@ %s]\n",
+                               human_readable_size(A, s->st_size *
+                                                              (names->len - 1)),
+                               human_readable_size(A, s->st_size));
                     }
                     printf("%s\n", names->names[j]);
                 }
@@ -341,7 +344,8 @@ int main(int argc, char **argv)
 
     fprintf(stderr, "Arguments:\n");
     fprintf(stderr, " path     : %s\n", args->path);
-    fprintf(stderr, " min_bytes: %d\n", args->min_bytes);
+    fprintf(stderr, " min_bytes: %s\n",
+            human_readable_size(&A, args->min_bytes));
     fprintf(stderr, "\n");
     fprintf(stderr, "===============================\n");
 
