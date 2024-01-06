@@ -2,7 +2,7 @@
 
 Find Duplicate Finder is a tool that identifies and lists duplicate
 files within a specified directory.
-This utility is written in C and currently designed to 
+This utility is written in C and currently designed to
 run seamlessly on POSIX-compliant systems.
 
 ## Build
