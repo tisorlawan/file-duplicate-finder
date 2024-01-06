@@ -2,14 +2,14 @@ CC=gcc
 CFLAGS=-Wall -Wextra -std=gnu11
 OFLAGS=-O2
 
-file-deduper: main.c
-	@$(CC) $(CFLAGS) $(OFLAGS) main.c -o file-deduper
+duplicate-finder: main.c
+	$(CC) $(CFLAGS) $(OFLAGS) main.c -o duplicate-finder
 
 debug: clean main.c
-	$(CC) $(CFLAGS) -ggdb main.c -o file-deduper
+	$(CC) $(CFLAGS) -ggdb main.c -o duplicate-finder
 
 run: file-deduper
-	@./file-deduper
+	@./duplicate-finder
 
 clean:
-	@$(RM) file-deduper
+	@$(RM) duplicate-finder

@@ -1,4 +1,3 @@
-#include <assert.h>
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
@@ -182,24 +181,46 @@ void name_bucket_add_entry_chars(Arena *A, NameBucket *nb, const char *name,
     names_add(A, nb->names[h], name);
 }
 
-void name_bucket_debug(NameBucket *nb)
+void print_human_readable_size(size_t s)
 {
-    int multi_files_bucket = 0;
-    int total_bucket = 0;
+    if (s < 1024) {
+        printf("%zu B", s);
+    } else if (s < 1024 * 1024) {
+        printf("%.1f KB", (double)s / 1024.0);
+    } else if (s < 1024 * 1024 * 1024) {
+        printf("%.1f MB", (double)s / (1024.0 * 1024.0));
+    } else {
+        printf("%.1f GB", (double)s / (1024.0 * 1024.0 * 1024.0));
+    }
+}
 
+void name_bucket_list(Arena *A, NameBucket *nb)
+{
     for (size_t i = 0; i < nb->bucket_size; i++) {
         if (nb->names[i] != NULL) {
+            int nb_with_duplicates = 0;
             if (nb->names[i]->len > 1) {
-                printf("Bucket: %zu\n", i);
-                multi_files_bucket += 1;
-                names_debug(nb->names[i]);
+                Names *names = nb->names[i];
+                for (size_t j = 0; j < names->len; j++) {
+                    if (j == 0) {
+                        struct stat *s = arena_alloc(A, sizeof(struct stat));
+                        stat(names->names[j], s);
+                        printf("* Wasted size = ");
+                        print_human_readable_size(s->st_size *
+                                                  (names->len - 1));
+                        printf(" [@ ");
+                        print_human_readable_size(s->st_size);
+                        printf("]");
+                        printf("\n");
+                    }
+                    printf("%s\n", names->names[j]);
+                }
+                nb_with_duplicates += 1;
             }
-            total_bucket += 1;
+            if (nb_with_duplicates > 0) {
+                printf("\n");
+            }
         }
-    }
-    if (multi_files_bucket > 0) {
-        printf("Number of multi files bucket: %d\n", multi_files_bucket);
-        printf("Number of bucket: %d\n", total_bucket);
     }
 }
 
@@ -386,8 +407,7 @@ int main(int argc, char **argv)
                 }
 
                 if (done == 1) {
-                    printf("\n");
-                    name_bucket_debug(nb_inner);
+                    name_bucket_list(&A, nb_inner);
                     continue;
                 }
 
